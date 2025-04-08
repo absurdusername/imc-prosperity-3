@@ -147,7 +147,7 @@ class ProductData:
 
         if len(self.ask_history) > 50:
             self.ask_history.pop(0)
-
+        
         if len(self.bid_history) > 50:
             self.bid_history.pop(0)
 
@@ -160,7 +160,7 @@ class ProductData:
 
     @property
     def asks(self) -> list:
-        """List of (price, quantity) for asks in increasing order of price.
+        """List of (price, quantity) for asks in incresaing order of price.
         Quantities are positive here, unlike in class Order."""
         return sorted(self.ask_history[-1])
 
@@ -186,12 +186,12 @@ class ProductData:
     def max_volume_bid_price(self) -> int:
         """Bid price of the order with the highest volume."""
         return max(self.bids, key=lambda t: t[1])[0]
-
+    
     @property
     def buy_capacity(self) -> int:
         """Maximum volume that can be bought without potentially exceeding position limit."""
         return self.limit - self.position
-
+    
     @property
     def sell_capacity(self) -> int:
         """Maximum volume that can be sold without potentially exceeding position limit."""
@@ -201,9 +201,9 @@ class ProductData:
 class Strategy:
     @staticmethod
     def jmerle_style_market_making(
-            product_data: ProductData,
-            max_buy_price: int,
-            min_sell_price: int
+        product_data: ProductData, 
+        max_buy_price: int,
+        min_sell_price: int
     ) -> list[Order]:
         """ 
         Inspired from Jmerle's `MarketMakingStrategy`.
@@ -215,15 +215,15 @@ class Strategy:
         SELL everything @ >= min_sell_price
         Use leftover capacity to SELL @ max_volume_ask_price - 1
         """
-
+        
         orders = []
 
-        to_buy = product_data.buy_capacity
-        to_sell = product_data.sell_capacity
+        to_buy = product_data.limit - product_data.position
+        to_sell = product_data.limit + product_data.position
 
         for price, quantity in product_data.asks:
             if to_buy and price <= max_buy_price:
-                quantity = min(quantity, to_buy)
+                quantity = min(quantity, product_data.buy_capacity)
                 orders.append(Order(product_data.symbol, price, quantity))
                 to_buy -= quantity
 
@@ -233,14 +233,14 @@ class Strategy:
 
         for price, quantity in product_data.bids:
             if to_sell > 0 and price >= min_sell_price:
-                quantity = min(quantity, to_sell)
+                quantity = min(to_sell, quantity)
                 orders.append(Order(product_data.symbol, price, -quantity))
                 to_sell -= quantity
-
+        
         if to_sell > 0:
             price = max(min_sell_price, product_data.max_volume_ask_price - 1)
             orders.append(Order(product_data.symbol, price, -to_sell))
-
+        
         return orders
 
 
@@ -282,30 +282,8 @@ class Trader:
         """
         resin_data = self.products["RAINFOREST_RESIN"]
 
-        to_buy = resin_data.buy_capacity
-        to_sell = resin_data.sell_capacity
-
-        # orders = []
-        #
-        # for price, quantity in resin_data.asks:
-        #     if price <= 9998:
-        #         quantity = min(quantity, to_buy)
-        #         to_buy -= quantity
-        #         orders.append(Order(resin_data.symbol, price, quantity))
-        #
-        # for price, quantity in resin_data.bids:
-        #     if price >= 10_002:
-        #         quantity = min(quantity, to_sell)
-        #         to_sell -= quantity
-        #         orders.append(Order(resin_data.symbol, price, -quantity))
-        #
-        # if to_sell > 0:
-        #     orders.append(Order(resin_data.symbol, 10_002, -to_sell))
-        #
-        # if to_buy > 0:
-        #     orders.append(Order(resin_data.symbol, 9998, to_buy))
-        #
-        # return orders
+        to_buy = resin_data.limit - resin_data.position
+        to_sell = resin_data.limit + resin_data.position
 
         buy_cheap = min(to_buy, 2)
         buy_ok = to_buy - buy_cheap
@@ -323,8 +301,7 @@ class Trader:
 
     def kelp(self) -> list[Order]:
         """
-        Use that parallel lines' theory to calculate prices.
-        Strategy.jmerle_style_market_making() to place orders.
+        That parallel lines' theory.
         """
         kelp_data = self.products["KELP"]
 
@@ -340,4 +317,4 @@ class Trader:
         )
 
     def squid_ink(self) -> list[Order]:
-        pass
+        return []
