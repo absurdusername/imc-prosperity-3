@@ -1,7 +1,5 @@
 from datamodel import *
 from typing import TypeAlias, Any
-import numpy as np
-from math import floor, ceil
 
 JSON: TypeAlias = dict[str, "JSON"] | list["JSON"] | str | int | float | bool | None
 
@@ -121,65 +119,49 @@ class Logger:
 
 
 class Product:
-    """Store historic data and planned-upcoming orders.
-
-    Attributes:
-        symbol (str): Self explanatory.
-        limit (int): Position limit.
-
-        position_history (list): Stores our position for the last n iterations.
-            position_history[-1] is the current position.
-
-        ask_history (list): Stores outstanding ask orders for the last n iterations.
-            [[ask_price_1, ask_volume_1], ...] is appended for each iteration.
-
-        bid_history (list): Similar to ask_history but for bids.
-            Volumes are stored as positive here, unlike in order_depth.
-
-        planned_orders (list): List of Orders we plan on placing.
-        planned_buy_volume (int): Total volume of all planned BUY orders.
-        planned_sell_volume (int): Total volume of all planned SELL orders.
-    """
-
     def __init__(self, symbol: str, limit: int):
         self.symbol: str = symbol
         self.limit: int = limit
-        self.position_history: list[int] = []
+        self.position: int = 0
 
+        # a new list of [price, quantity] pairs will be appended each iteration
+        # quantity for both ask_history and bid_history are stored as positive values!
         self.ask_history: list[list[list[int, int]]] = []
         self.bid_history: list[list[list[int, int]]] = []
 
+        # to store new Orders we will place
         self.planned_orders: list[Order] = []
         self.planned_buy_volume: int = 0
         self.planned_sell_volume: int = 0
 
     def load(self, state: TradingState, old_data: JSON) -> None:
-        # Reset these variables because AWS Lambda may or may not re-instantiate the class.
+        self.position = state.position.get(self.symbol, 0)
+
+        # Don't remove the following lines, this class is not re-instantiated every time
         self.planned_orders: list[Order] = []
         self.planned_buy_volume: int = 0
         self.planned_sell_volume: int = 0
 
-        position = state.position.get(self.symbol, 0)
         order_depth = state.order_depths[self.symbol]
         asks = [[price, -quantity] for price, quantity in order_depth.sell_orders.items()]
         bids = [[price, quantity] for price, quantity in order_depth.buy_orders.items()]
+        # the quantity for asks in order_depth is always negative, so the sign was flipped here
 
         if old_data:
-            self.position_history = old_data["position_history"]
             self.ask_history = old_data["ask_history"]
             self.bid_history = old_data["bid_history"]
 
-        self.position_history.append(position)
         self.ask_history.append(asks)
         self.bid_history.append(bids)
 
-        for sequence in (self.position_history, self.ask_history, self.bid_history):
-            if len(sequence) > 50:
-                sequence.pop(0)
+        if len(self.ask_history) > 50:
+            self.ask_history.pop(0)
+
+        if len(self.bid_history) > 50:
+            self.bid_history.pop(0)
 
     def save(self) -> JSON:
         data = {
-            "position_history": self.position_history,
             "ask_history": self.ask_history,
             "bid_history": self.bid_history,
         }
@@ -202,10 +184,6 @@ class Product:
             return
         self.planned_sell_volume += quantity
         self.planned_orders.append(Order(self.symbol, price, -quantity))
-
-    @property
-    def position(self) -> int:
-        return self.position_history[-1]
 
     @property
     def asks(self) -> list:
@@ -247,20 +225,6 @@ class Product:
         """Maximum volume that can be sold without potentially exceeding position limit."""
         return self.limit + self.position - self.planned_sell_volume
 
-    def linear_regression(self, window_size: int) -> list[float]:
-        if window_size > len(self.position_history):
-            return 0, 0
-
-        mid_prices = []
-
-        for i in range(-window_size, 0):
-            ask = max(self.ask_history[i], key=lambda t: t[1])[0]
-            bid = max(self.bid_history[i], key=lambda t: t[1])[0]
-            mid_prices.append((ask + bid) / 2)
-
-        m, b = np.polyfit(range(window_size), mid_prices, 1)
-        return m, b
-
 
 class Strategy:
     @staticmethod
@@ -278,29 +242,20 @@ class Strategy:
 
         SELL everything @ >= min_sell_price
         Use leftover capacity to SELL @ max_volume_ask_price - 1
-
-        All that plus some additional Orders when liquidation is required.
         """
-        limit_hits = sum(abs(p) == product.limit for p in product.position_history[-10:])
-        liquidation_required = (limit_hits >= 5) and abs(product.position) == product.limit
+        to_sell = product.limit + product.position
 
         for price, quantity in product.asks:
             if price <= max_buy_price:
                 quantity = min(quantity, product.buy_capacity)
                 product.buy(price, quantity)
 
-        if liquidation_required:
-            product.buy(max_buy_price + 1, product.buy_capacity // 4)
-
         price = min(max_buy_price, product.max_volume_bid_price + 1)
         product.buy(price, product.buy_capacity)
 
-        if liquidation_required:
-            product.sell(min_sell_price - 1, product.buy_capacity // 4)
-
         for price, quantity in product.bids:
             if price >= min_sell_price:
-                quantity = min(product.sell_capacity, quantity)
+                quantity = min(to_sell, quantity)
                 product.sell(price, quantity)
 
         price = max(min_sell_price, product.max_volume_ask_price - 1)
@@ -368,8 +323,7 @@ class Trader:
         """
         kelp = self.products["KELP"]
 
-        f = (kelp.max_volume_ask_price + kelp.max_volume_bid_price + 3) / 2
-        f = floor(f) if kelp.position > 0 else ceil(f)
+        f = (kelp.max_volume_ask_price + kelp.max_volume_bid_price + 3) // 2
 
         max_buy_price = (f - 2) - (kelp.position > kelp.limit * 0.25)
         min_sell_price = (f - 1) + (kelp.position < kelp.limit * -0.25)
