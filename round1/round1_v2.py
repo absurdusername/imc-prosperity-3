@@ -267,7 +267,8 @@ class Strategy:
     def jmerle_style_market_making(
             product: Product,
             max_buy_price: int,
-            min_sell_price: int
+            min_sell_price: int,
+            window_size: int=10
     ) -> None:
         """
         Inspired from Jmerle's `MarketMakingStrategy`.
@@ -279,24 +280,21 @@ class Strategy:
         SELL everything @ >= min_sell_price
         Use leftover capacity to SELL @ max_volume_ask_price - 1
 
-        All that plus some additional Orders when liquidation is required.
+        Jmerle also has some "liquidation conditions".
+        They didn't make a single SeaShell worth of difference in any tests yet.
+        But might include such safeguards later.
         """
-        limit_hits = sum(abs(p) == product.limit for p in product.position_history[-10:])
-        liquidation_required = (limit_hits >= 5) and abs(product.position) == product.limit
+        # limit_hits = sum(abs(p) == product.limit for p in product.position_history[-window_size:])
+        # soft_liquidate = (limit_hits >= window_size // 2) and abs(product.position) == product.limit
+        # hard_liquidate =
 
         for price, quantity in product.asks:
             if price <= max_buy_price:
                 quantity = min(quantity, product.buy_capacity)
                 product.buy(price, quantity)
 
-        if liquidation_required:
-            product.buy(max_buy_price + 1, product.buy_capacity // 4)
-
         price = min(max_buy_price, product.max_volume_bid_price + 1)
         product.buy(price, product.buy_capacity)
-
-        if liquidation_required:
-            product.sell(min_sell_price - 1, product.buy_capacity // 4)
 
         for price, quantity in product.bids:
             if price >= min_sell_price:
@@ -329,6 +327,7 @@ class Trader:
 
         self.trade_rainforest_resin()
         self.trade_kelp()
+        # self.trade_squid_ink()
 
         result = {
             "RAINFOREST_RESIN": self.products["RAINFOREST_RESIN"].planned_orders,
@@ -343,23 +342,16 @@ class Trader:
         return result, 0, json.dumps(new_trader_data)
 
     def trade_rainforest_resin(self) -> None:
-        """
-        BUY 2 items @ 9996 and SELL 2 items @ 10,004.
-        Use leftover capacity to BUY and SELL @ 9998 and 10,002 respectively.
-        """
         resin = self.products["RAINFOREST_RESIN"]
 
-        buy_cheap = min(resin.buy_capacity, 2)
-        buy_ok = resin.buy_capacity - buy_cheap
+        max_buy_price = 9998
+        min_sell_price = 10_002
 
-        sell_exp = min(resin.sell_capacity, 2)
-        sell_ok = resin.sell_capacity - sell_exp
-
-        resin.buy(9996, buy_cheap)
-        resin.buy(9998, buy_ok)
-
-        resin.sell(10_002, sell_ok)
-        resin.sell(10_004, sell_exp)
+        Strategy.jmerle_style_market_making(
+            product=resin,
+            max_buy_price=max_buy_price,
+            min_sell_price=min_sell_price,
+        )
 
     def trade_kelp(self) -> None:
         """
@@ -377,8 +369,20 @@ class Trader:
         return Strategy.jmerle_style_market_making(
             product=kelp,
             max_buy_price=max_buy_price,
-            min_sell_price=min_sell_price
+            min_sell_price=min_sell_price,
         )
 
-    def squid_ink(self) -> None:
-        pass
+    def trade_squid_ink(self) -> None:
+        squid = self.products["SQUID_INK"]
+
+        avg = (squid.max_volume_ask_price + squid.max_volume_bid_price) / 2
+        avg = floor(avg) if squid.position > 0 else ceil(avg)
+
+        max_buy_price = (avg - 1) - (squid.position > squid.limit * 0.5)
+        min_sell_price = (avg + 1) + (squid.position < squid.limit * -0.5)
+
+        return Strategy.jmerle_style_market_making(
+            product=squid,
+            max_buy_price=max_buy_price,
+            min_sell_price=min_sell_price,
+        )
