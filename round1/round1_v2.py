@@ -118,50 +118,97 @@ class Logger:
         return value[: max_length - 3] + "..."
 
 
-class ProductData:
+class Product:
+    """Store historic data and planned-upcoming orders.
+
+    Attributes:
+        symbol (str): Self explanatory.
+        limit (int): Position limit.
+
+        position_history (list): Stores our position for the last n iterations.
+            position_history[-1] is the current position.
+
+        ask_history (list): Stores outstanding ask orders for the last n iterations.
+            [[ask_price_1, ask_volume_1], ...] is appended for each iteration.
+
+        bid_history (list): Similar to ask_history but for bids.
+            Volumes are stored as positive here, unlike in order_depth.
+
+        planned_orders (list): List of Orders we plan on placing.
+        planned_buy_volume (int): Total volume of all planned BUY orders.
+        planned_sell_volume (int): Total volume of all planned SELL orders.
+    """
     def __init__(self, symbol: str, limit: int):
         self.symbol: str = symbol
         self.limit: int = limit
+        self.position_history: list[int] = []
 
-        self.position: int = None
-
-        # a new list of [price, quantity] pairs will be appended each iteration
-        # quantity for both ask_history and bid_history are stored as positive values!
         self.ask_history: list[list[list[int, int]]] = []
         self.bid_history: list[list[list[int, int]]] = []
 
-    def load(self, state: TradingState, old_data: JSON) -> None:
-        self.position = state.position.get(self.symbol, 0)
+        self.planned_orders: list[Order] = []
+        self.planned_buy_volume: int = 0
+        self.planned_sell_volume: int = 0
 
+    def load(self, state: TradingState, old_data: JSON) -> None:
+        # Reset these variables because AWS Lambda may or may not re-instantiate the class.
+        self.planned_orders: list[Order] = []
+        self.planned_buy_volume: int = 0
+        self.planned_sell_volume: int = 0
+
+        position = state.position.get(self.symbol, 0)
         order_depth = state.order_depths[self.symbol]
         asks = [[price, -quantity] for price, quantity in order_depth.sell_orders.items()]
         bids = [[price, quantity] for price, quantity in order_depth.buy_orders.items()]
-        # the quantity for asks in order_depth is always negative, so the sign was flipped here
 
         if old_data:
+            self.position_history = old_data["position_history"]
             self.ask_history = old_data["ask_history"]
             self.bid_history = old_data["bid_history"]
 
+        self.position_history.append(position)
         self.ask_history.append(asks)
         self.bid_history.append(bids)
 
-        if len(self.ask_history) > 50:
-            self.ask_history.pop(0)
-
-        if len(self.bid_history) > 50:
-            self.bid_history.pop(0)
+        for sequence in (self.position_history, self.ask_history, self.bid_history):
+            if len(sequence) > 50:
+                sequence.pop(0)
 
     def save(self) -> JSON:
         data = {
+            "position_history": self.position_history,
             "ask_history": self.ask_history,
             "bid_history": self.bid_history,
         }
         return data
 
+    def buy(self, price: int, quantity: int) -> None:
+        """Add a BUY order to planned orders."""
+        # TO-DO: verify that quantity does not exceed limits
+        if quantity == 0:
+            return
+        self.planned_buy_volume += quantity
+        self.planned_orders.append(Order(self.symbol, price, quantity))
+
+    def sell(self, price: int, quantity: int) -> None:
+        """Add a SELL order to planned orders.
+        Parameter `quantity` is positive here. No negative number BS.
+        """
+        # TO-DO: verify that quantity does not exceed limits
+        if quantity == 0:
+            return
+        self.planned_sell_volume += quantity
+        self.planned_orders.append(Order(self.symbol, price, -quantity))
+
+    @property
+    def position(self) -> int:
+        return self.position_history[-1]
+
     @property
     def asks(self) -> list:
         """List of (price, quantity) for asks in increasing order of price.
-        Quantities are positive here, unlike in class Order."""
+        Quantities are positive here, unlike in class Order.
+        """
         return sorted(self.ask_history[-1])
 
     @property
@@ -190,22 +237,22 @@ class ProductData:
     @property
     def buy_capacity(self) -> int:
         """Maximum volume that can be bought without potentially exceeding position limit."""
-        return self.limit - self.position
+        return self.limit - self.position - self.planned_buy_volume
 
     @property
     def sell_capacity(self) -> int:
         """Maximum volume that can be sold without potentially exceeding position limit."""
-        return self.limit + self.position
+        return self.limit + self.position - self.planned_sell_volume
 
 
 class Strategy:
     @staticmethod
     def jmerle_style_market_making(
-            product_data: ProductData,
+            product: Product,
             max_buy_price: int,
             min_sell_price: int
-    ) -> list[Order]:
-        """ 
+    ) -> None:
+        """
         Inspired from Jmerle's `MarketMakingStrategy`.
         https://github.com/jmerle/imc-prosperity-2/blob/master/src/submissions/round5.py
 
@@ -215,129 +262,96 @@ class Strategy:
         SELL everything @ >= min_sell_price
         Use leftover capacity to SELL @ max_volume_ask_price - 1
         """
+        to_sell = product.limit + product.position
 
-        orders = []
+        for price, quantity in product.asks:
+            if price <= max_buy_price:
+                quantity = min(quantity, product.buy_capacity)
+                product.buy(price, quantity)
 
-        to_buy = product_data.buy_capacity
-        to_sell = product_data.sell_capacity
+        price = min(max_buy_price, product.max_volume_bid_price + 1)
+        product.buy(price, product.buy_capacity)
 
-        for price, quantity in product_data.asks:
-            if to_buy and price <= max_buy_price:
-                quantity = min(quantity, to_buy)
-                orders.append(Order(product_data.symbol, price, quantity))
-                to_buy -= quantity
+        for price, quantity in product.bids:
+            if price >= min_sell_price:
+                quantity = min(to_sell, quantity)
+                product.sell(price, quantity)
 
-        if to_buy > 0:
-            price = min(max_buy_price, product_data.max_volume_bid_price + 1)
-            orders.append(Order(product_data.symbol, price, to_buy))
-
-        for price, quantity in product_data.bids:
-            if to_sell > 0 and price >= min_sell_price:
-                quantity = min(quantity, to_sell)
-                orders.append(Order(product_data.symbol, price, -quantity))
-                to_sell -= quantity
-
-        if to_sell > 0:
-            price = max(min_sell_price, product_data.max_volume_ask_price - 1)
-            orders.append(Order(product_data.symbol, price, -to_sell))
-
-        return orders
+        price = max(min_sell_price, product.max_volume_ask_price - 1)
+        product.sell(price, product.sell_capacity)
 
 
 class Trader:
     def __init__(self) -> None:
+        # all historic data and upcoming Orders will be stored in Product instances
         self.products = {
-            "RAINFOREST_RESIN": ProductData("RAINFOREST_RESIN", 50),
-            "KELP": ProductData("KELP", 50),
-            # "SQUID_INK": ProductData("SQUID_INK", 50),
+            "RAINFOREST_RESIN": Product("RAINFOREST_RESIN", 50),
+            "KELP": Product("KELP", 50),
+            "SQUID_INK": Product("SQUID_INK", 50),
         }
 
     def run(self, state: TradingState):
         # load old data from state.traderData + new data from state
         old_trader_data = json.loads(state.traderData) if state.traderData != "" else {}
-        for symbol, product_data in self.products.items():
-            product_data.load(state, old_trader_data.get(symbol, {}))
+        for symbol, product in self.products.items():
+            product.load(state, old_trader_data.get(symbol, {}))
 
         # store all data in a dict for next iteration
         new_trader_data = dict()
-        for symbol, product_data in self.products.items():
-            new_trader_data[symbol] = product_data.save()
+        for symbol, product in self.products.items():
+            new_trader_data[symbol] = product.save()
 
-        result = {}
+        self.trade_rainforest_resin()
+        self.trade_kelp()
+
+        result = {
+            "RAINFOREST_RESIN": self.products["RAINFOREST_RESIN"].planned_orders,
+            "KELP": self.products["KELP"].planned_orders,
+            "SQUID_INK": self.products["SQUID_INK"].planned_orders,
+        }
         conversions = 0
-
-        result["RAINFOREST_RESIN"] = self.rainforest_resin()
-        result["KELP"] = self.kelp()
-        # result["SQUID_INK"] = self.squid_ink()
 
         logger = Logger()
         logger.flush(state, result, conversions, state.traderData)
 
         return result, 0, json.dumps(new_trader_data)
 
-    def rainforest_resin(self) -> list[Order]:
+    def trade_rainforest_resin(self) -> None:
         """
         BUY 2 items @ 9996 and SELL 2 items @ 10,004.
         Use leftover capacity to BUY and SELL @ 9998 and 10,002 respectively.
         """
-        resin_data = self.products["RAINFOREST_RESIN"]
+        resin = self.products["RAINFOREST_RESIN"]
 
-        to_buy = resin_data.buy_capacity
-        to_sell = resin_data.sell_capacity
+        buy_cheap = min(resin.buy_capacity, 2)
+        buy_ok = resin.buy_capacity - buy_cheap
 
-        # orders = []
-        #
-        # for price, quantity in resin_data.asks:
-        #     if price <= 9998:
-        #         quantity = min(quantity, to_buy)
-        #         to_buy -= quantity
-        #         orders.append(Order(resin_data.symbol, price, quantity))
-        #
-        # for price, quantity in resin_data.bids:
-        #     if price >= 10_002:
-        #         quantity = min(quantity, to_sell)
-        #         to_sell -= quantity
-        #         orders.append(Order(resin_data.symbol, price, -quantity))
-        #
-        # if to_sell > 0:
-        #     orders.append(Order(resin_data.symbol, 10_002, -to_sell))
-        #
-        # if to_buy > 0:
-        #     orders.append(Order(resin_data.symbol, 9998, to_buy))
-        #
-        # return orders
+        sell_exp = min(resin.sell_capacity, 2)
+        sell_ok = resin.sell_capacity - sell_exp
 
-        buy_cheap = min(to_buy, 2)
-        buy_ok = to_buy - buy_cheap
+        resin.buy(9996, buy_cheap)
+        resin.buy(9998, buy_ok)
 
-        sell_exp = min(to_sell, 2)
-        sell_ok = to_sell - sell_exp
+        resin.sell(10_002, sell_ok)
+        resin.sell(10_004, sell_exp)
 
-        return [
-            Order(resin_data.symbol, 9996, buy_cheap),
-            Order(resin_data.symbol, 9998, buy_ok),
-
-            Order(resin_data.symbol, 10_002, -sell_ok),
-            Order(resin_data.symbol, 10_004, -sell_exp),
-        ]
-
-    def kelp(self) -> list[Order]:
+    def trade_kelp(self) -> None:
         """
         Use that parallel lines' theory to calculate prices.
         Strategy.jmerle_style_market_making() to place orders.
         """
-        kelp_data = self.products["KELP"]
+        kelp = self.products["KELP"]
 
-        f = (kelp_data.max_volume_ask_price + kelp_data.max_volume_bid_price + 3) // 2
+        f = (kelp.max_volume_ask_price + kelp.max_volume_bid_price + 3) // 2
 
-        max_buy_price = (f - 2) - (kelp_data.position > kelp_data.limit * 0.25)
-        min_sell_price = (f - 1) + (kelp_data.position < kelp_data.limit * -0.25)
+        max_buy_price = (f - 2) - (kelp.position > kelp.limit * 0.25)
+        min_sell_price = (f - 1) + (kelp.position < kelp.limit * -0.25)
 
         return Strategy.jmerle_style_market_making(
-            product_data=kelp_data,
+            product=kelp,
             max_buy_price=max_buy_price,
             min_sell_price=min_sell_price
         )
 
-    def squid_ink(self) -> list[Order]:
+    def squid_ink(self) -> None:
         pass
