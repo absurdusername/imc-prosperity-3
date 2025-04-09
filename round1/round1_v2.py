@@ -174,7 +174,7 @@ class Product:
         self.bid_history.append(bids)
 
         for sequence in (self.position_history, self.ask_history, self.bid_history):
-            if len(sequence) > 50:
+            if len(sequence) > 3:
                 sequence.pop(0)
 
     def save(self) -> JSON:
@@ -268,7 +268,6 @@ class Strategy:
             product: Product,
             max_buy_price: int,
             min_sell_price: int,
-            window_size: int=10
     ) -> None:
         """
         Inspired from Jmerle's `MarketMakingStrategy`.
@@ -281,13 +280,8 @@ class Strategy:
         Use leftover capacity to SELL @ max_volume_ask_price - 1
 
         Jmerle also has some "liquidation conditions".
-        They didn't make a single SeaShell worth of difference in any tests yet.
-        But might include such safeguards later.
+        Excluded because they didn't seem to make any difference.
         """
-        # limit_hits = sum(abs(p) == product.limit for p in product.position_history[-window_size:])
-        # soft_liquidate = (limit_hits >= window_size // 2) and abs(product.position) == product.limit
-        # hard_liquidate =
-
         for price, quantity in product.asks:
             if price <= max_buy_price:
                 quantity = min(quantity, product.buy_capacity)
@@ -327,7 +321,7 @@ class Trader:
 
         self.trade_rainforest_resin()
         self.trade_kelp()
-        # self.trade_squid_ink()
+        self.trade_squid_ink()
 
         result = {
             "RAINFOREST_RESIN": self.products["RAINFOREST_RESIN"].planned_orders,
@@ -373,16 +367,4 @@ class Trader:
         )
 
     def trade_squid_ink(self) -> None:
-        squid = self.products["SQUID_INK"]
-
-        avg = (squid.max_volume_ask_price + squid.max_volume_bid_price) / 2
-        avg = floor(avg) if squid.position > 0 else ceil(avg)
-
-        max_buy_price = (avg - 1) - (squid.position > squid.limit * 0.5)
-        min_sell_price = (avg + 1) + (squid.position < squid.limit * -0.5)
-
-        return Strategy.jmerle_style_market_making(
-            product=squid,
-            max_buy_price=max_buy_price,
-            min_sell_price=min_sell_price,
-        )
+        pass
