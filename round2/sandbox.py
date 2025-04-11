@@ -3,7 +3,6 @@ from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder
 from typing import Any, List
 import json
 
-
 class Logger:
     def __init__(self) -> None:
         self.logs = ""
@@ -116,9 +115,8 @@ class Logger:
 
         return value[: max_length - 3] + "..."
 
-
 class SimpleStrategy:
-    def __init__(self, symbol: Symbol, limit: int, window_size: int = 10):
+    def __init__(self, symbol: Symbol, limit: int, window_size: int=10):
         self.symbol = symbol
         self.limit = limit
         self.window_size = window_size
@@ -160,6 +158,42 @@ class SimpleStrategy:
         if len(self.window) > self.window_size:
             self.window.pop(0)
 
+    def adjust_order_size(self, quantity, side):
+        """Adjust order size based on market conditions.
+        side: 1 for buy, -1 for sell"""
+        if not self.market_info:
+            return quantity
+
+        if self.symbol == "KELP" and "resin_mid" in self.market_info and self.last_true_value:
+            resin_mid = self.market_info.get("resin_mid")
+
+            if abs(resin_mid - 10000) > 10:
+
+                if (resin_mid > 10000 and side > 0) or (resin_mid < 10000 and side < 0):
+                    return int(quantity * 0.75)
+                else:
+
+                    return int(quantity * 1.15)
+
+        liquidity_factor = 1.0
+        if self.symbol == "RAINFOREST_RESIN" and "resin_depth" in self.market_info:
+
+            depth = self.market_info.get("resin_depth")
+            if depth and depth.buy_orders and depth.sell_orders:
+                buy_depth = sum(vol for vol in depth.buy_orders.values())
+                sell_depth = sum(-vol for vol in depth.sell_orders.values())
+                if buy_depth > sell_depth * 2 and side < 0:
+                    liquidity_factor = 0.85
+                elif sell_depth > buy_depth * 2 and side > 0:
+                    liquidity_factor = 0.85
+
+        position_ratio = abs(self.current_position) / self.limit if self.limit > 0 else 0
+        if position_ratio > 0.9:
+            return int(quantity * 0.7 * liquidity_factor)
+        elif position_ratio > 0.7:
+            return int(quantity * 0.9 * liquidity_factor)
+
+        return int(quantity * liquidity_factor)
 
     def get_orders(self) -> list[Order]:
         orders = []
@@ -184,8 +218,7 @@ class SimpleStrategy:
                     buy_limit -= adjusted_quantity
 
         if buy_limit > 0:
-            popular_buy_price = max(self.outstanding_buy_orders, key=lambda tup: tup[1])[
-                0] if self.outstanding_buy_orders else (true_value - 2)
+            popular_buy_price = max(self.outstanding_buy_orders, key=lambda tup: tup[1])[0] if self.outstanding_buy_orders else (true_value - 2)
 
             position_ratio = self.current_position / self.limit if self.limit > 0 else 0
             if position_ratio > 0.85:
@@ -207,8 +240,7 @@ class SimpleStrategy:
                     sell_limit -= adjusted_quantity
 
         if sell_limit > 0:
-            popular_sell_price = min(self.outstanding_sell_orders, key=lambda tup: tup[1])[
-                0] if self.outstanding_sell_orders else (true_value + 2)
+            popular_sell_price = min(self.outstanding_sell_orders, key=lambda tup: tup[1])[0] if self.outstanding_sell_orders else (true_value + 2)
 
             position_ratio = self.current_position / self.limit if self.limit > 0 else 0
             if position_ratio < -0.85:
@@ -222,14 +254,12 @@ class SimpleStrategy:
 
         return orders
 
-
 class RainforestResinStrategy(SimpleStrategy):
     def __init__(self):
         super().__init__("RAINFOREST_RESIN", 50)
 
     def get_true_value(self) -> int:
         return 10_000
-
 
 class KelpStrategy(SimpleStrategy):
     def __init__(self):
@@ -270,9 +300,9 @@ class KelpStrategy(SimpleStrategy):
                 self.volatility_history.pop(0)
 
         if len(self.price_history) >= 3:
-            if all(self.price_history[i] < self.price_history[i + 1] for i in range(len(self.price_history) - 1)):
+            if all(self.price_history[i] < self.price_history[i+1] for i in range(len(self.price_history)-1)):
                 midpoint += 1
-            elif all(self.price_history[i] > self.price_history[i + 1] for i in range(len(self.price_history) - 1)):
+            elif all(self.price_history[i] > self.price_history[i+1] for i in range(len(self.price_history)-1)):
                 midpoint -= 1
 
         self.last_midpoint = midpoint
@@ -316,8 +346,8 @@ class KelpStrategy(SimpleStrategy):
             adjusted_quantity = int(adjusted_quantity * 0.9)
 
         if len(self.price_history) >= 3:
-            price_changes = [self.price_history[i + 1] - self.price_history[i]
-                             for i in range(len(self.price_history) - 1)]
+            price_changes = [self.price_history[i+1] - self.price_history[i]
+                            for i in range(len(self.price_history)-1)]
             avg_movement = sum(price_changes) / len(price_changes)
 
             if abs(avg_movement) >= 1:
@@ -352,10 +382,8 @@ class KelpStrategy(SimpleStrategy):
         min_sell_price = true_value + sell_offset
 
         position_ratio = self.current_position / self.limit if self.limit > 0 else 0
-        if position_ratio > 0.8:
-            max_buy_price = true_value + buy_offset - 1
-        elif position_ratio < -0.8:
-            min_sell_price = true_value + sell_offset + 1
+        if position_ratio > 0.8: max_buy_price = true_value + buy_offset - 1
+        elif position_ratio < -0.8: min_sell_price = true_value + sell_offset + 1
 
         for price, volume in self.outstanding_sell_orders:
             if buy_limit > 0 and price <= max_buy_price:
@@ -396,7 +424,6 @@ class KelpStrategy(SimpleStrategy):
                 orders.append(Order(self.symbol, price, -quantity))
 
         return orders
-
 
 class SquidInkStrategy(SimpleStrategy):
     def __init__(self):
@@ -501,10 +528,8 @@ class SquidInkStrategy(SimpleStrategy):
         min_sell_price = true_value + sell_offset
 
         position_ratio = self.current_position / self.limit if self.limit > 0 else 0
-        if position_ratio > 0.8:
-            max_buy_price = true_value + buy_offset - 1
-        elif position_ratio < -0.8:
-            min_sell_price = true_value + sell_offset + 1
+        if position_ratio > 0.8: max_buy_price = true_value + buy_offset - 1
+        elif position_ratio < -0.8: min_sell_price = true_value + sell_offset + 1
 
         for price, volume in self.outstanding_sell_orders:
             if buy_limit > 0 and price <= max_buy_price:
@@ -544,7 +569,6 @@ class SquidInkStrategy(SimpleStrategy):
 
         return orders
 
-
 class Trader:
     strategy_lookup = {
         "RAINFOREST_RESIN": RainforestResinStrategy(),
@@ -570,10 +594,8 @@ class Trader:
             resin_strategy.read(state)
 
             if market_info["resin_depth"]:
-                best_bid = max(market_info["resin_depth"].buy_orders.keys()) if market_info[
-                    "resin_depth"].buy_orders else None
-                best_ask = min(market_info["resin_depth"].sell_orders.keys()) if market_info[
-                    "resin_depth"].sell_orders else None
+                best_bid = max(market_info["resin_depth"].buy_orders.keys()) if market_info["resin_depth"].buy_orders else None
+                best_ask = min(market_info["resin_depth"].sell_orders.keys()) if market_info["resin_depth"].sell_orders else None
                 if best_bid and best_ask:
                     market_info["resin_spread"] = best_ask - best_bid
                     market_info["resin_mid"] = (best_ask + best_bid) / 2
@@ -585,10 +607,8 @@ class Trader:
             kelp_strategy.read(state)
 
             if market_info["kelp_depth"]:
-                best_bid = max(market_info["kelp_depth"].buy_orders.keys()) if market_info[
-                    "kelp_depth"].buy_orders else None
-                best_ask = min(market_info["kelp_depth"].sell_orders.keys()) if market_info[
-                    "kelp_depth"].sell_orders else None
+                best_bid = max(market_info["kelp_depth"].buy_orders.keys()) if market_info["kelp_depth"].buy_orders else None
+                best_ask = min(market_info["kelp_depth"].sell_orders.keys()) if market_info["kelp_depth"].sell_orders else None
                 if best_bid and best_ask:
                     market_info["kelp_spread"] = best_ask - best_bid
                     market_info["kelp_mid"] = (best_ask + best_bid) / 2
@@ -601,10 +621,8 @@ class Trader:
             squid_strategy.read(state)
 
             if market_info["squid_depth"]:
-                best_bid = max(market_info["squid_depth"].buy_orders.keys()) if market_info[
-                    "squid_depth"].buy_orders else None
-                best_ask = min(market_info["squid_depth"].sell_orders.keys()) if market_info[
-                    "squid_depth"].sell_orders else None
+                best_bid = max(market_info["squid_depth"].buy_orders.keys()) if market_info["squid_depth"].buy_orders else None
+                best_ask = min(market_info["squid_depth"].sell_orders.keys()) if market_info["squid_depth"].sell_orders else None
                 if best_bid and best_ask:
                     market_info["squid_spread"] = best_ask - best_bid
                     market_info["squid_mid"] = (best_ask + best_bid) / 2
@@ -671,13 +689,11 @@ class Trader:
 
                         order_increases_pos = False
                         if order.symbol == "KELP":
-                            if (order.quantity > 0 and kelp_position >= 0) or (
-                                    order.quantity < 0 and kelp_position <= 0):
+                            if (order.quantity > 0 and kelp_position >= 0) or (order.quantity < 0 and kelp_position <= 0):
                                 order_increases_pos = True
                         elif order.symbol == "SQUID_INK":
-                            if (order.quantity > 0 and squid_position >= 0) or (
-                                    order.quantity < 0 and squid_position <= 0):
+                             if (order.quantity > 0 and squid_position >= 0) or (order.quantity < 0 and squid_position <= 0):
                                 order_increases_pos = True
 
                         if order_increases_pos:
-                            order.quantity = int(order.quantity * reduction_factor)
+                             order.quantity = int(order.quantity * reduction_factor)

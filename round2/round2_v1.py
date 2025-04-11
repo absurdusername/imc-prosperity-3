@@ -3,7 +3,7 @@ import itertools
 from datamodel import *
 from typing import TypeAlias, Any
 import numpy as np
-from math import floor, ceil
+from math import floor, ceil, copysign, log
 from statistics import mean, stdev
 from collections import deque
 
@@ -130,7 +130,7 @@ class Product:
     Attributes:
         symbol (str): Self explanatory.
         limit (int): Position limit.
-        history_size (int): Number of past iterations for which data is preserved.
+        history_size_limit (int): Number of past iterations for which data is preserved.
             The length of position_history, ask_history, and bid_history are bound by this.
 
         position_history (deque): Stores our position for the last n iterations.
@@ -147,10 +147,10 @@ class Product:
         planned_sell_volume (int): Total volume of all planned SELL orders.
     """
 
-    def __init__(self, symbol: str, limit: int, history_size: int = 10):
+    def __init__(self, symbol: str, limit: int, history_size_limit: int = 10):
         self.symbol: str = symbol
         self.limit: int = limit
-        self.history_size: int = history_size
+        self.history_size_limit: int = history_size_limit
 
         self.position_history: deque[int] = deque()
         self.ask_history: deque[list[list[int, int]]] = deque()
@@ -181,7 +181,7 @@ class Product:
         self.bid_history.append(bids)
 
         for sequence in (self.position_history, self.ask_history, self.bid_history):
-            if len(sequence) > self.history_size:
+            if len(sequence) > self.history_size_limit:
                 sequence.popleft()
 
     def save(self) -> JSON:
@@ -211,28 +211,39 @@ class Product:
         self.planned_orders.append(Order(self.symbol, price, -quantity))
 
     @property
+    def history_size(self) -> int:
+        """Numbers of iterations for which data is available at the moment."""
+        return len(self.position_history)
+
+    @property
     def position(self) -> int:
         return self.position_history[-1]
 
     @property
+    def position_ratio(self) -> float:
+        return self.position / self.limit
+
+    @property
     def asks(self) -> list:
-        """List of (price, quantity) for asks in increasing order of price.
+        """List of (price, quantity) for asks in **increasing order of price**.
         Quantities are positive here, unlike in class Order.
         """
         return sorted(self.ask_history[-1])
 
     @property
     def bids(self) -> list:
-        """List of (price, quantity) for bids in decreasing order of price."""
+        """List of (price, quantity) for bids in **decreasing order of price.**"""
         return sorted(self.bid_history[-1], reverse=True)
 
     @property
     def best_ask_price(self) -> int:
-        return min(price for price, _ in self.asks)
+        """Minimum ask price."""
+        return self.asks[0][0]
 
     @property
     def best_bid_price(self) -> int:
-        return max(price for price, _ in self.bids)
+        """Maximum bid price."""
+        return self.bids[0][0]
 
     @property
     def max_volume_ask_price(self) -> int:
@@ -243,6 +254,11 @@ class Product:
     def max_volume_bid_price(self) -> int:
         """Bid price of the order with the highest volume."""
         return max(self.bids, key=lambda t: t[1])[0]
+
+    @property
+    def mid_price(self) -> float:
+        """Average of max_volume_ask_price and max_volume_bid_price."""
+        return (self.max_volume_ask_price + self.max_volume_bid_price) / 2
 
     @property
     def buy_capacity(self) -> int:
@@ -268,10 +284,9 @@ class Product:
 
         return mid_prices
 
-    def linear_regression(self, window_size: int) -> list[float]:
+    def linear_regression(self, window_size: int) -> tuple[float, float]:
         mid_prices = self.historic_mid_prices(window_size)
         m, b = np.polyfit(range(window_size), mid_prices, 1)
-
         return m, b
 
 
@@ -279,18 +294,18 @@ class Strategy:
     @staticmethod
     def jmerle_style_market_making(
             product: Product,
-            max_buy_price: int,
-            min_sell_price: int,
+            buy_price: int,
+            sell_price: int,
             liquidate_on_limit: bool
     ) -> None:
-        """Place orders given max_buy_price and `min_sell_price`.
+        """Place orders given buy_price and `sell_price`.
         Inspired from Jmerle's `MarketMakingStrategy`.
         https://github.com/jmerle/imc-prosperity-2/blob/master/src/submissions/round5.py
 
-        BUY everything @ <= max_buy_price
+        BUY everything @ <= buy_price
         Use leftover capacity to BUY @ max_volume_bid_price + 1
 
-        SELL everything @ >= min_sell_price
+        SELL everything @ >= sell_price
         Use leftover capacity to SELL @ max_volume_ask_price - 1
 
         All that plus some additional Orders when liquidation is required.
@@ -302,25 +317,25 @@ class Strategy:
         liquidation_required = (limit_hits >= 5) and abs(product.position) == product.limit
 
         for price, quantity in product.asks:
-            if price <= max_buy_price:
+            if price <= buy_price:
                 quantity = min(quantity, product.buy_capacity)
                 product.buy(price, quantity)
 
         if liquidate_on_limit and liquidation_required:
-            product.buy(max_buy_price + 1, product.buy_capacity // 2)
+            product.buy(buy_price + 1, product.buy_capacity // 2)
 
-        price = min(max_buy_price, product.max_volume_bid_price + 1)
+        price = min(buy_price, product.max_volume_bid_price + 1)
         product.buy(price, product.buy_capacity)
 
         for price, quantity in product.bids:
-            if price >= min_sell_price:
+            if price >= sell_price:
                 quantity = min(product.sell_capacity, quantity)
                 product.sell(price, quantity)
 
         if liquidate_on_limit and liquidation_required:
-            product.sell(min_sell_price - 1, product.buy_capacity // 2)
+            product.sell(sell_price - 1, product.buy_capacity // 2)
 
-        price = max(min_sell_price, product.max_volume_ask_price - 1)
+        price = max(sell_price, product.max_volume_ask_price - 1)
         product.sell(price, product.sell_capacity)
 
 
@@ -330,7 +345,7 @@ class Trader:
         self.products = {
             "RAINFOREST_RESIN": Product("RAINFOREST_RESIN", 50),
             "KELP": Product("KELP", 50),
-            "SQUID_INK": Product("SQUID_INK", 50, history_size=500),
+            "SQUID_INK": Product("SQUID_INK", 50, history_size_limit=30000),
         }
 
     def run(self, state: TradingState):
@@ -345,6 +360,9 @@ class Trader:
         for symbol, product in self.products.items():
             # new_trader_data[symbol] = product.save()
             pass
+
+        # with open("debug.txt", "a") as file:
+        #     file.write(f"\n{state.timestamp}: ")
 
         self.trade_rainforest_resin()
         self.trade_kelp()
@@ -372,8 +390,8 @@ class Trader:
 
         Strategy.jmerle_style_market_making(
             product=resin,
-            max_buy_price=9998,
-            min_sell_price=10_002,
+            buy_price=9998,
+            sell_price=10_002,
             liquidate_on_limit=False
         )
 
@@ -387,32 +405,39 @@ class Trader:
         f = (kelp.max_volume_ask_price + kelp.max_volume_bid_price + 3) / 2
         f = floor(f) if kelp.position > 0 else ceil(f)
 
-        max_buy_price = (f - 2) - (kelp.position > kelp.limit * 0.25)
-        min_sell_price = (f - 1) + (kelp.position < kelp.limit * -0.25)
+        buy_price = (f - 2) - (kelp.position_ratio > 0.25)
+        sell_price = (f - 1) + (kelp.position_ratio < -0.25)
 
         return Strategy.jmerle_style_market_making(
             product=kelp,
-            max_buy_price=max_buy_price,
-            min_sell_price=min_sell_price,
+            buy_price=buy_price,
+            sell_price=sell_price,
             liquidate_on_limit=True
         )
+
 
     def trade_squid_ink(self) -> None:
         squid = self.products["SQUID_INK"]
 
-        if len(squid.position_history) < 150:
+        if squid.history_size < 50:
             return
 
-        mid_prices = squid.historic_mid_prices(150)
-        smooth_price = mean(mid_prices[-10:])
+        mid_prices = squid.historic_mid_prices(50)
+        log_returns = [log(y / x) for x, y in itertools.pairwise(mid_prices)]
+        sigma = stdev(log_returns)
 
-        old_prices =[mean(mid_prices[i:i+10]) for i in range(0, 140, 10)]
-        sigma = stdev(old_prices)
+        gamma = 0.1
+        k = 1.5  # Order arrival sensitivity
+        lambda_ = 5  # Order arrival rate
+        q = squid.position
+        S_t = squid.mid_price
 
-        # z_score = (smooth_price - mu) / sigma`
-        z_score = (smooth_price - old_prices[-1]) / sigma
+        spread_adjustment = (1 / k) * np.log(1 + k * lambda_)
+        bid_price = S_t - (gamma * sigma ** 2 * q / k) - spread_adjustment
+        ask_price = S_t + (gamma * sigma ** 2 * q / k) + spread_adjustment
 
-        if z_score <= -3 or z_score <= -2 and squid.position < 0:
-            squid.buy(squid.best_ask_price - 1, 1)
-        elif z_score >= 3 or z_score >= 2 and squid.position > 0:
-            squid.sell(squid.best_bid_price + 1, 1)
+        squid.buy(bid_price, squid.buy_capacity // 2)
+        squid.sell(ask_price, squid.sell_capacity // 2)
+
+        with open("debug.txt", "a") as f:
+            f.write(f"{squid.mid_price}, {bid_price}, {ask_price}\n")
