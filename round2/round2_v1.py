@@ -1,11 +1,12 @@
-import itertools
-
 from datamodel import *
 from typing import TypeAlias, Any
-import numpy as np
-from math import floor, ceil, copysign, log
-from statistics import mean, stdev
+
+from math import floor, ceil, copysign, log, e
+from statistics import mean, stdev, mode, median
 from collections import deque
+
+import itertools
+import numpy as np
 
 JSON: TypeAlias = dict[str, "JSON"] | list["JSON"] | str | int | float | bool | None
 
@@ -292,50 +293,51 @@ class Product:
 
 class Strategy:
     @staticmethod
-    def jmerle_style_market_making(
+    def simple_market_making(
             product: Product,
-            buy_price: int,
-            sell_price: int,
-            liquidate_on_limit: bool
+            max_buy_price: int,
+            min_sell_price: int,
+            to_buy: int = None,
+            to_sell: int = None,
     ) -> None:
-        """Place orders given buy_price and `sell_price`.
-        Inspired from Jmerle's `MarketMakingStrategy`.
+        """
+        Adapted from Jmerle's `MarketMakingStrategy`.
         https://github.com/jmerle/imc-prosperity-2/blob/master/src/submissions/round5.py
 
-        BUY everything @ <= buy_price
-        Use leftover capacity to BUY @ max_volume_bid_price + 1
+        Args:
+            product (Product): The corresponding `Product` instance.
 
-        SELL everything @ >= sell_price
-        Use leftover capacity to SELL @ max_volume_ask_price - 1
+            max_buy_price (int): Never BUY above this price.
+            min_sell_price (int): Never SELL below this price.
 
-        All that plus some additional Orders when liquidation is required.
+            to_buy (int): Maximum volume of BUY orders to place.
+                Defaults to `product.buy_capacity`.
+
+            to_sell (int): Maximum volume of SELL orders to place.
+                Defaults to `product.sell_capacity`.
         """
-        limit_hits = sum(
-            abs(product.position_history[-i]) == product.limit
-            for i in range(1, min(10, len(product.position_history)))
-        )
-        liquidation_required = (limit_hits >= 5) and abs(product.position) == product.limit
+        if to_buy is None:
+            to_buy = product.buy_capacity
+
+        if to_sell is None:
+            to_sell = product.sell_capacity
 
         for price, quantity in product.asks:
-            if price <= buy_price:
-                quantity = min(quantity, product.buy_capacity)
+            if price <= max_buy_price and to_buy:
+                quantity = min(quantity, to_buy)
                 product.buy(price, quantity)
+                to_buy -= quantity
 
-        if liquidate_on_limit and liquidation_required:
-            product.buy(buy_price + 1, product.buy_capacity // 2)
-
-        price = min(buy_price, product.max_volume_bid_price + 1)
-        product.buy(price, product.buy_capacity)
+        price = min(max_buy_price, product.max_volume_bid_price + 1)
+        product.buy(price, to_buy)
 
         for price, quantity in product.bids:
-            if price >= sell_price:
+            if price >= min_sell_price and to_sell:
                 quantity = min(product.sell_capacity, quantity)
                 product.sell(price, quantity)
+                to_sell -= quantity
 
-        if liquidate_on_limit and liquidation_required:
-            product.sell(sell_price - 1, product.buy_capacity // 2)
-
-        price = max(sell_price, product.max_volume_ask_price - 1)
+        price = max(min_sell_price, product.max_volume_ask_price - 1)
         product.sell(price, product.sell_capacity)
 
 
@@ -343,9 +345,15 @@ class Trader:
     def __init__(self) -> None:
         # all historic data and upcoming Orders will be stored in Product instances
         self.products = {
-            "RAINFOREST_RESIN": Product("RAINFOREST_RESIN", 50),
-            "KELP": Product("KELP", 50),
-            "SQUID_INK": Product("SQUID_INK", 50, history_size_limit=30000),
+            "RAINFOREST_RESIN": Product("RAINFOREST_RESIN", 50, history_size_limit=1),
+            "KELP": Product("KELP", 50, history_size_limit=1),
+            "SQUID_INK": Product("SQUID_INK", 50, history_size_limit=1),
+
+            "CROISSANTS": Product("CROISSANTS", 250, history_size_limit=50),
+            "JAMS": Product("JAMS", 350, history_size_limit=50),
+            "DJEMBES": Product("DJEMBES", 60, history_size_limit=50),
+            "PICNIC_BASKET1": Product("PICNIC_BASKET1", 60, history_size_limit=50),
+            "PICNIC_BASKET2": Product("PICNIC_BASKET2", 100, history_size_limit=50),
         }
 
     def run(self, state: TradingState):
@@ -361,17 +369,16 @@ class Trader:
             # new_trader_data[symbol] = product.save()
             pass
 
-        # with open("debug.txt", "a") as file:
-        #     file.write(f"\n{state.timestamp}: ")
-
         self.trade_rainforest_resin()
         self.trade_kelp()
         self.trade_squid_ink()
 
+        self.trade_picnic_basket1()
+        self.trade_picnic_basket2()
+
         result = {
-            "RAINFOREST_RESIN": self.products["RAINFOREST_RESIN"].planned_orders,
-            "KELP": self.products["KELP"].planned_orders,
-            "SQUID_INK": self.products["SQUID_INK"].planned_orders,
+            symbol: product.planned_orders
+            for symbol, product in self.products.items()
         }
         conversions = 0
 
@@ -381,63 +388,94 @@ class Trader:
         return result, 0, json.dumps(new_trader_data)
 
     def trade_rainforest_resin(self) -> None:
-        """
-        Outstanding sell orders below 10,000 are always priced at 9,998.
-        And outstanding buy orders above 10,000 are always priced at 10,002.
-        Use those prices with Strategy.jmerle_style_market_making().
-        """
         resin = self.products["RAINFOREST_RESIN"]
 
-        Strategy.jmerle_style_market_making(
+        Strategy.simple_market_making(
             product=resin,
-            buy_price=9998,
-            sell_price=10_002,
-            liquidate_on_limit=False
+            max_buy_price=9999,
+            min_sell_price=10_001
         )
 
     def trade_kelp(self) -> None:
-        """
-        Use that stupid parallel lines idea to calculate prices.
-        Strategy.jmerle_style_market_making() to place orders.
-        """
         kelp = self.products["KELP"]
 
         f = (kelp.max_volume_ask_price + kelp.max_volume_bid_price + 3) / 2
         f = floor(f) if kelp.position > 0 else ceil(f)
 
-        buy_price = (f - 2) - (kelp.position_ratio > 0.25)
-        sell_price = (f - 1) + (kelp.position_ratio < -0.25)
+        max_buy_price = (f - 2) - (kelp.position_ratio > 0.45) - (kelp.position_ratio > 0.8)
+        min_sell_price = (f - 1) + (kelp.position_ratio < -0.45) + (kelp.position_ratio < -0.8)
 
-        return Strategy.jmerle_style_market_making(
+        if kelp.position_ratio < -0.9:
+            max_buy_price += 1  # desperate, will BUY at bad price
+
+        if kelp.position_ratio > 0.9:
+            min_sell_price -= 1  # desperate, will SELL at bad price
+
+        Strategy.simple_market_making(
             product=kelp,
-            buy_price=buy_price,
-            sell_price=sell_price,
-            liquidate_on_limit=True
+            max_buy_price=max_buy_price,
+            min_sell_price=min_sell_price,
         )
 
-
     def trade_squid_ink(self) -> None:
-        squid = self.products["SQUID_INK"]
+        pass
 
-        if squid.history_size < 50:
-            return
+    def trade_picnic_basket1(self) -> None:
+        picnic_basket1 = self.products["PICNIC_BASKET1"]
 
-        mid_prices = squid.historic_mid_prices(50)
-        log_returns = [log(y / x) for x, y in itertools.pairwise(mid_prices)]
-        sigma = stdev(log_returns)
+        c = self.products["CROISSANTS"].mid_price
+        j = self.products["JAMS"].mid_price
+        d = self.products["DJEMBES"].mid_price
 
-        gamma = 0.1
-        k = 1.5  # Order arrival sensitivity
-        lambda_ = 5  # Order arrival rate
-        q = squid.position
-        S_t = squid.mid_price
+        sum_of_parts = 6 * c + 3 * j + 1 * d
 
-        spread_adjustment = (1 / k) * np.log(1 + k * lambda_)
-        bid_price = S_t - (gamma * sigma ** 2 * q / k) - spread_adjustment
-        ask_price = S_t + (gamma * sigma ** 2 * q / k) + spread_adjustment
+        fair_value = (1.15 * sum_of_parts + 0.85 * picnic_basket1.mid_price) / 2
+        max_buy_price = round(fair_value - 6 - max(picnic_basket1.position, 0))
+        min_sell_price = round(fair_value + 6 + max(-picnic_basket1.position, 0))
 
-        squid.buy(bid_price, squid.buy_capacity // 2)
-        squid.sell(ask_price, squid.sell_capacity // 2)
+        to_buy = picnic_basket1.buy_capacity // 10
+        to_sell = picnic_basket1.sell_capacity // 10
 
-        with open("debug.txt", "a") as f:
-            f.write(f"{squid.mid_price}, {bid_price}, {ask_price}\n")
+        Strategy.simple_market_making(
+            product=picnic_basket1,
+            max_buy_price=max_buy_price,
+            min_sell_price=min_sell_price,
+            to_buy=to_buy,
+            to_sell=to_sell,
+        )
+
+    def trade_picnic_basket2(self) -> None:
+        picnic_basket2 = self.products["PICNIC_BASKET2"]
+
+        croissants = self.products["CROISSANTS"]
+        jams = self.products["JAMS"]
+
+        sum_of_parts = lambda c, j: 4 * c + 2 * j
+
+        c = croissants.mid_price
+        j = jams.mid_price
+
+        x = sum_of_parts(c, j)
+        brew = lambda r: e ** (2 * (r - 0.5))
+
+        max_buy_price = round(x - 25 - 2 * brew(picnic_basket2.position_ratio) * max(picnic_basket2.position, 0))
+        min_sell_price = round(x + 25 + 2 * + brew(picnic_basket2.position_ratio) * max(-picnic_basket2.position, 0))
+
+        to_buy = (picnic_basket2.buy_capacity // 10) + max(-picnic_basket2.position // 5, 0)
+        to_sell = (picnic_basket2.sell_capacity // 10) + max(picnic_basket2.position // 5, 0)
+
+        for price, quantity in picnic_basket2.asks:
+            if price <= max_buy_price and to_buy:
+                quantity = min(quantity, to_buy)
+                picnic_basket2.buy(price, quantity)
+
+        price = min(max_buy_price, picnic_basket2.max_volume_bid_price + 1)
+        picnic_basket2.buy(price, to_buy)
+
+        for price, quantity in picnic_basket2.bids:
+            if price >= min_sell_price and to_sell:
+                quantity = min(picnic_basket2.sell_capacity, quantity)
+                picnic_basket2.sell(price, quantity)
+
+        price = max(min_sell_price, picnic_basket2.max_volume_ask_price - 1)
+        picnic_basket2.sell(price, to_sell)

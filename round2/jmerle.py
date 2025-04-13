@@ -6,6 +6,8 @@ from typing import Any, TypeAlias
 
 JSON: TypeAlias = dict[str, "JSON"] | list["JSON"] | str | int | float | bool | None
 
+
+
 class Logger:
     def __init__(self) -> None:
         self.logs = ""
@@ -131,16 +133,22 @@ class Strategy:
     def act(self, state: TradingState) -> None:
         raise NotImplementedError()
 
-    def run(self, state: TradingState) -> list[Order]:
+    def run(self, state: TradingState) -> tuple[list[Order], int]:
         self.orders = []
+        self.conversions = 0
+
         self.act(state)
-        return self.orders
+
+        return self.orders, self.conversions
 
     def buy(self, price: int, quantity: int) -> None:
         self.orders.append(Order(self.symbol, price, quantity))
 
     def sell(self, price: int, quantity: int) -> None:
         self.orders.append(Order(self.symbol, price, -quantity))
+
+    def convert(self, amount: int) -> None:
+        self.conversions += amount
 
     def save(self) -> JSON:
         return None
@@ -156,7 +164,7 @@ class MarketMakingStrategy(Strategy):
         self.window_size = 10
 
     @abstractmethod
-    def get_true_value(state: TradingState) -> int:
+    def get_true_value(self, state: TradingState) -> int:
         raise NotImplementedError()
 
     def act(self, state: TradingState) -> None:
@@ -245,33 +253,47 @@ class StarfruitStrategy(MarketMakingStrategy):
 
         return round((popular_buy_price + popular_sell_price) / 2)
 
+class OrchidsStrategy(Strategy):
+    def act(self, state: TradingState) -> None:
+        position = state.position.get(self.symbol, 0)
+        self.convert(-1 * position)
+
+        obs = state.observations.conversionObservations.get(self.symbol, None)
+        if obs is None:
+            return
+
+        buy_price = obs.askPrice + obs.transportFees + obs.importTariff
+        self.sell(max(int(obs.bidPrice - 0.5), int(buy_price + 1)), self.limit)
+
 class Trader:
     def __init__(self) -> None:
         limits = {
             "RAINFOREST_RESIN": 50,
-            # "STARFRUIT": 20,
+            "KELP": 50,
+            # "ORCHIDS": 100,
         }
 
-        self.strategies = {symbol: clazz(symbol, limits[symbol]) for symbol, clazz in {
+        self.strategies: dict[Symbol, Strategy] = {symbol: clazz(symbol, limits[symbol]) for symbol, clazz in {
             "RAINFOREST_RESIN": AmethystsStrategy,
-            # "STARFRUIT": StarfruitStrategy,
+            "KELP": StarfruitStrategy,
+            # "ORCHIDS": OrchidsStrategy,
         }.items()}
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
-        logger.print(state.position)
-
+        orders = {}
         conversions = 0
 
         old_trader_data = json.loads(state.traderData) if state.traderData != "" else {}
         new_trader_data = {}
 
-        orders = {}
         for symbol, strategy in self.strategies.items():
             if symbol in old_trader_data:
-                strategy.load(old_trader_data.get(symbol, None))
+                strategy.load(old_trader_data[symbol])
 
             if symbol in state.order_depths:
-                orders[symbol] = strategy.run(state)
+                strategy_orders, strategy_conversions = strategy.run(state)
+                orders[symbol] = strategy_orders
+                conversions += strategy_conversions
 
             new_trader_data[symbol] = strategy.save()
 

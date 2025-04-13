@@ -2,6 +2,8 @@ from datamodel import *
 from typing import TypeAlias, Any
 import numpy as np
 from math import floor, ceil
+from statistics import mean
+import itertools
 
 JSON: TypeAlias = dict[str, "JSON"] | list["JSON"] | str | int | float | bool | None
 
@@ -174,7 +176,7 @@ class Product:
         self.bid_history.append(bids)
 
         for sequence in (self.position_history, self.ask_history, self.bid_history):
-            if len(sequence) > 3:
+            if len(sequence) > 50:
                 sequence.pop(0)
 
     def save(self) -> JSON:
@@ -247,10 +249,11 @@ class Product:
         """Maximum volume that can be sold without potentially exceeding position limit."""
         return self.limit + self.position - self.planned_sell_volume
 
-    def linear_regression(self, window_size: int) -> list[float]:
-        if window_size > len(self.position_history):
-            return 0, 0
-
+    def historic_mid_prices(self, window_size: int) -> list[float]:
+        """List of mid-prices.
+        More recent ones towards the end.
+        mid_price := (max_volume_ask_price + max_volume_bid_price) // 2
+        """
         mid_prices = []
 
         for i in range(-window_size, 0):
@@ -258,8 +261,17 @@ class Product:
             bid = max(self.bid_history[i], key=lambda t: t[1])[0]
             mid_prices.append((ask + bid) / 2)
 
+        return mid_prices
+
+    def linear_regression(self, window_size: int) -> tuple[float, float, float]:
+        mid_prices = self.historic_mid_prices(window_size)
         m, b = np.polyfit(range(window_size), mid_prices, 1)
-        return m, b
+
+        loss = 0
+        for x, y in enumerate(mid_prices):
+            loss += (y - m * x - b) ** 2
+
+        return m, b, loss
 
 
 class Strategy:
@@ -307,6 +319,9 @@ class Trader:
             "KELP": Product("KELP", 50),
             "SQUID_INK": Product("SQUID_INK", 50),
         }
+        self.last_squid_buy = 0
+        self.last_squid_sell = 0
+        self.timestamp = 0
 
     def run(self, state: TradingState):
         # load old data from state.traderData + new data from state
@@ -319,9 +334,13 @@ class Trader:
         for symbol, product in self.products.items():
             new_trader_data[symbol] = product.save()
 
+        self.last_squid_buy = new_trader_data.get("last_squid_buy", -10_000)
+        self.last_squid_sell = new_trader_data.get("last_squid_buy", -10_000)
+        self.timestamp = state.timestamp
+
         self.trade_rainforest_resin()
-        self.trade_kelp()
-        self.trade_squid_ink()
+        # self.trade_kelp()
+        # self.trade_squid_ink()
 
         result = {
             "RAINFOREST_RESIN": self.products["RAINFOREST_RESIN"].planned_orders,
@@ -329,6 +348,8 @@ class Trader:
             "SQUID_INK": self.products["SQUID_INK"].planned_orders,
         }
         conversions = 0
+
+        new_trader_data["last_squid_buy"] = self.last_squid_buy
 
         logger = Logger()
         logger.flush(state, result, conversions, state.traderData)
@@ -367,4 +388,20 @@ class Trader:
         )
 
     def trade_squid_ink(self) -> None:
+        # squid = self.products["SQUID_INK"]
+        #
+        # if len(squid.position_history) < 15:
+        #     return
+        #
+        # m, b, _ = squid.linear_regression(15)
+        #
+        # ideal = squid.historic_mid_prices(1)[0] + m
+        #
+        # if abs(m) <= 0.05:
+        #     mid = (squid.max_volume_ask_price + squid.max_volume_bid_price + 1) / 2
+        #     Strategy.jmerle_style_market_making(
+        #         squid,
+        #         max_buy_price=round(ideal - m),
+        #         min_sell_price=round(ideal + m),
+        #     )
         pass
