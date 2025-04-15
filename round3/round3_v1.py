@@ -376,13 +376,13 @@ class Trader:
             # new_trader_data[symbol] = product.save()
             pass
 
-        # self.trade_rainforest_resin()
+        self.trade_rainforest_resin()
         self.trade_kelp()
-        # self.trade_squid_ink()
+        self.trade_squid_ink()
 
-        # self.trade_croissants()
-        # self.trade_picnic_basket1()
-        # self.trade_picnic_basket2()
+        self.trade_croissants()
+        self.trade_picnic_basket1()
+        self.trade_picnic_basket2()
 
         result = {
             symbol: product.planned_orders
@@ -463,7 +463,7 @@ class Trader:
             min_sell_price=min_sell_price,
         )
 
-        # def trade_jams(self) -> None:
+    def trade_jams(self) -> None:
         # jams = self.products["JAMS"]
         #
         # window_size = min(jams.history_size, 1500)
@@ -487,83 +487,39 @@ class Trader:
         # )
         pass
 
-    # def trade_picnic_basket1(self) -> None:
-    #     picnic_basket1 = self.products["PICNIC_BASKET1"]
-    #     croissants = self.products["CROISSANTS"]
-    #
-    #     c = self.products["CROISSANTS"].mid_price
-    #     j = self.products["JAMS"].mid_price
-    #     d = self.products["DJEMBES"].mid_price
-    #
-    #     sum_of_parts = 6 * c + 3 * j + 1 * d
-    #     fair_value = 0.55 * sum_of_parts + 0.45 * picnic_basket1.mid_price
-    #
-    #     delta = picnic_basket1.mid_price - sum_of_parts
-    #     with open("debug.txt", "a") as file:
-    #         file.write(str(picnic_basket1.mid_price) + ", " + str(delta) + "\n")
-    #
-    #     ## BETTER POSITIONS
-    #     # max_buy_price = round(fair_value - 5 - 150 * max(picnic_basket1.position_ratio, 0))
-    #     # min_sell_price = round(fair_value + 5 + 150 * max(-picnic_basket1.position_ratio, 0))
-    #     #
-    #     # to_buy = picnic_basket1.buy_capacity // 10
-    #     # to_sell = picnic_basket1.sell_capacity // 10
-    #     #
-    #     # Strategy.simple_market_making(
-    #     #     product=picnic_basket1,
-    #     #     max_buy_price=max_buy_price,
-    #     #     min_sell_price=min_sell_price,
-    #     #     to_buy=to_buy,
-    #     #     to_sell=to_sell,
-    #     # )
-    #
-    #     # BETTER PnL
-    #     max_buy_price = round(fair_value - 6)
-    #     min_sell_price = round(fair_value + 6)
-    #
-    #     Strategy.simple_market_making(
-    #         product=picnic_basket1,
-    #         max_buy_price=max_buy_price,
-    #         min_sell_price=min_sell_price,
-    #     )
-
     def trade_picnic_basket1(self) -> None:
+        picnic_basket1 = self.products["PICNIC_BASKET1"]
+        croissants = self.products["CROISSANTS"]
+        jams = self.products["JAMS"]
+        djembes = self.products["DJEMBES"]
+
         f = lambda c, j, d: 6 * c + 3 * j + 1 * d
 
-        picnic_basket1 = self.products["PICNIC_BASKET1"]
+        sum_of_parts = f(croissants.mid_price, jams.mid_price, djembes.mid_price)
+        fair_value = 0.55 * sum_of_parts + 0.45 * picnic_basket1.mid_price
 
-        cp = self.products["CROISSANTS"].mid_price_history[-100:]
-        jp = self.products["JAMS"].mid_price_history[-100:]
-        dp = self.products["DJEMBES"].mid_price_history[-100:]
+        max_buy_price = round(fair_value - 6)
+        min_sell_price = round(fair_value + 6)
+
+        cp = croissants.mid_price_history[-100:]
+        jp = jams.mid_price_history[-100:]
+        dp = djembes.mid_price_history[-100:]
         pp = picnic_basket1.mid_price_history[-100:]
 
-        premiums = [
-            pp[i] - f(cp[i], jp[i], dp[i])
-            for i in range(len(pp))
-        ]
+        premiums = [pp[i] - f(cp[i], jp[i], dp[i]) for i in range(len(pp))]
 
-        # sign = (premiums[-1] >= 0)
-        # for i in range(len(premiums) - 1, -1, -1):
-        #     if (premiums[i] >= 0) != sign:
-        #         premiums = premiums[i + 1:]
-        #         break
+        if len(premiums) >= 2:
+            mu, sigma = mean(premiums), stdev(premiums)
 
-        if len(premiums) <= 1:
-            return
+            max_buy_price = min(
+                max_buy_price,
+                round(picnic_basket1.max_volume_ask_price - 0.55 * sigma)
+            )
 
-        mu, sigma = mean(premiums), stdev(premiums)
-
-        fair_value = 6 * cp[-1] + 3 * jp[-1] + 1 * dp[-1]
-
-        max_buy_price = round(min(
-            picnic_basket1.max_volume_ask_price - 0.5 * sigma,
-            fair_value + 4
-        ))
-
-        min_sell_price = round(max(
-            picnic_basket1.max_volume_bid_price + 0.5 * sigma,
-            fair_value - 4,
-        ))
+            min_sell_price = max(
+                min_sell_price,
+                round(picnic_basket1.max_volume_bid_price + 0.55 * sigma),
+            )
 
         Strategy.simple_market_making(
             product=picnic_basket1,
