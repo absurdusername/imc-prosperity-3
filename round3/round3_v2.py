@@ -125,15 +125,6 @@ class Logger:
         return value[: max_length - 3] + "..."
 
 
-def linear_regression_predict(prices: list[float]) -> float:
-    if len(prices) < 2:
-        return prices[-1] if prices else 0.0
-    x = np.arange(len(prices))
-    y = np.array(prices)
-    m, b = np.polyfit(x, y, 1)
-    return m * len(prices) + b
-
-
 class Product:
     """Store historic data and planned-upcoming orders.
 
@@ -360,9 +351,9 @@ class Trader:
     def __init__(self) -> None:
         # all historic data and upcoming Orders will be stored in Product instances
         self.products = {
-            # "RAINFOREST_RESIN": Product("RAINFOREST_RESIN", 50),
-            # "KELP": Product("KELP", 50),
-            # "SQUID_INK": Product("SQUID_INK", 50),
+            "RAINFOREST_RESIN": Product("RAINFOREST_RESIN", 50),
+            "KELP": Product("KELP", 50),
+            "SQUID_INK": Product("SQUID_INK", 50),
 
             "CROISSANTS": Product("CROISSANTS", 250),
             "JAMS": Product("JAMS", 350),
@@ -387,11 +378,12 @@ class Trader:
 
         # self.trade_rainforest_resin()
         # self.trade_kelp()
-
         # self.trade_squid_ink()
-
+        #
         # self.trade_croissants()
-        self.trade_picnic_basket1()
+        # self.trade_jams()
+        self.trade_djembes() # TO-DO
+        # self.trade_picnic_basket1()
         self.trade_picnic_basket2()
 
         result = {
@@ -437,48 +429,19 @@ class Trader:
             min_sell_price=min_sell_price,
         )
 
-    # def trade_squid_ink(self) -> None:
-    #     squid_ink = self.products["SQUID_INK"]
-
-    #     if squid_ink.history_size < 100:
-    #         return
-
-    #     m, b = squid_ink.linear_regression()
-
-    #     x = squid_ink.history_size  # iteration number
-    #     fair_value = m * x + b
-
-    #     max_buy_price = round(fair_value - 10)
-    #     min_sell_price = round(fair_value + 10)
-
-    #     Strategy.simple_market_making(
-    #         product=squid_ink,
-    #         max_buy_price=max_buy_price,
-    #         min_sell_price=min_sell_price,
-    #     )
-
     def trade_squid_ink(self) -> None:
         squid_ink = self.products["SQUID_INK"]
 
-        if squid_ink.history_size < 3:
+        if squid_ink.history_size < 100:
             return
 
-        # === Get last 3 trades ===
-        recent_trades = squid_ink.mid_price_history[-3:]
-        if len(recent_trades) < 3:
-            return
-        avg_recent = sum(recent_trades) / 3
+        m, b = squid_ink.linear_regression()
 
-        # === Get historical high and low from mid prices ===
-        historical_high = max(squid_ink.mid_price_history)
-        historical_low = min(squid_ink.mid_price_history)
+        x = squid_ink.history_size  # iteration number
+        fair_value = m * x + b
 
-        # === Calculate fair value from all 4 params ===
-        fair_value = (avg_recent + historical_low + historical_high) / 3
-
-        # === Define buy/sell bounds ===
-        max_buy_price = round(fair_value - 5)
-        min_sell_price = round(fair_value + 5)
+        max_buy_price = round(fair_value - 7)
+        min_sell_price = round(fair_value + 7)
 
         Strategy.simple_market_making(
             product=squid_ink,
@@ -503,256 +466,114 @@ class Trader:
         )
 
     def trade_jams(self) -> None:
+        croissant = self.products["CROISSANTS"]
+        m, b = croissant.linear_regression()
+        x = croissant.history_size  # iteration number
+        croissant_fair_value = m * x + b
+
+        c = self.products["CROISSANTS"].mid_price
+        j = self.products["JAMS"].mid_price
+        basket2_fair_value = 4 * c + 2 * j
+
+        jams_fair_value = (basket2_fair_value - 4 * croissant_fair_value) / 2
+
+        max_buy_price = round(jams_fair_value - 14)
+        min_sell_price = round(jams_fair_value + 14)
+
+        jams = self.products["JAMS"]
+
+        Strategy.simple_market_making(
+            product=jams,
+            max_buy_price=max_buy_price,
+            min_sell_price=min_sell_price,
+        )
+
+    def trade_djembes(self) -> None:
+        # picnic_basket1 = self.products["PICNIC_BASKET1"]
+        # croissant = self.products["CROISSANTS"]
         # jams = self.products["JAMS"]
+        # djembes = self.products["DJEMBES"]
         #
-        # window_size = min(jams.history_size, 1500)
-        # m, b = jams.linear_regression()
+        # m, b = croissant.linear_regression()
+        # x = croissant.history_size  # iteration number
+        # croissant_fair_value = m * x + b
         #
-        # x = jams.history_size  # iteration number
-        # fair_value = m * x + b
+        # c = self.products["CROISSANTS"].mid_price
+        # j = self.products["JAMS"].mid_price
+        # basket2_fair_value = 4 * c + 2 * j
         #
-        # max_buy_price = round(fair_value - 8)
-        # min_sell_price = round(fair_value + 8)
+        # jams_fair_value = (basket2_fair_value - 4 * croissant_fair_value) / 2
         #
-        # to_buy = jams.buy_capacity // 10
-        # to_sell = jams.sell_capacity // 10
+        # f = lambda c, j, d: 6 * c + 3 * j + 1 * d
+        # sum_of_parts = f(croissant.mid_price, jams.mid_price, djembes.mid_price)
+        # basket1_fair_value = 0.55 * sum_of_parts + 0.45 * picnic_basket1.mid_price
+        #
+        # djembes_fair_value = (basket1_fair_value - 6 * croissant_fair_value - 3 * jams.mid_price)
+        # # djembes_fair_value = (0.45 * djembes_fair_value + 0.55 * djembes.mid_price)
+        #
+        # max_buy_price = round(djembes_fair_value - 15)
+        # min_sell_price = round(djembes_fair_value + 15)
         #
         # Strategy.simple_market_making(
-        #     product=jams,
+        #     product=djembes,
         #     max_buy_price=max_buy_price,
         #     min_sell_price=min_sell_price,
-        #     to_buy=to_buy,
-        #     to_sell=to_sell
         # )
         pass
 
-    # def trade_picnic_basket1(self) -> None:
-    #     picnic_basket1 = self.products["PICNIC_BASKET1"]
-    #
-    #     c = self.products["CROISSANTS"].mid_price
-    #     j = self.products["JAMS"].mid_price
-    #     d = self.products["DJEMBES"].mid_price
-    #
-    #     sum_of_parts = 6 * c + 3 * j + 1 * d
-    #     fair_value = 0.55 * sum_of_parts + 0.45 * picnic_basket1.mid_price
-    #
-    #     ## BETTER POSITIONS
-    #     # max_buy_price = round(fair_value - 5 - 150 * max(picnic_basket1.position_ratio, 0))
-    #     # min_sell_price = round(fair_value + 5 + 150 * max(-picnic_basket1.position_ratio, 0))
-    #     #
-    #     # to_buy = picnic_basket1.buy_capacity // 10
-    #     # to_sell = picnic_basket1.sell_capacity // 10
-    #     #
-    #     # Strategy.simple_market_making(
-    #     #     product=picnic_basket1,
-    #     #     max_buy_price=max_buy_price,
-    #     #     min_sell_price=min_sell_price,
-    #     #     to_buy=to_buy,
-    #     #     to_sell=to_sell,
-    #     # )
-    #
-    #     # BETTER PnL
-    #     max_buy_price = round(fair_value - 6)
-    #     min_sell_price = round(fair_value + 6)
-    #
-    #     Strategy.simple_market_making(
-    #         product=picnic_basket1,
-    #         max_buy_price=max_buy_price,
-    #         min_sell_price=min_sell_price,
-    #     )
-
-    # def trade_picnic_basket1(self) -> None:
-    #     picnic_basket1 = self.products["PICNIC_BASKET1"]
-    #     croissants = self.products["CROISSANTS"]
-    #     jams = self.products["JAMS"]
-    #     djembes = self.products["DJEMBES"]
-
-    #     f = lambda c, j, d: 6 * c + 3 * j + 1 * d
-
-    #     fair_value = f(croissants.mid_price, jams.mid_price, djembes.mid_price)
-    #     max_buy_price = round(fair_value - 6)
-    #     min_sell_price = round(fair_value + 6)
-
-    #     cp = croissants.mid_price_history[-100:]
-    #     jp = jams.mid_price_history[-100:]
-    #     dp = djembes.mid_price_history[-100:]
-    #     pp = picnic_basket1.mid_price_history[-100:]
-
-    #     premiums = [
-    #         pp[i] - f(cp[i], jp[i], dp[i])
-    #         for i in range(len(pp))
-    #     ]
-
-    #     if len(premiums) >= 2:
-    #         mu, sigma = mean(premiums), stdev(premiums)
-
-    #         max_buy_price = min(
-    #             max_buy_price,
-    #             round(picnic_basket1.max_volume_ask_price - 0.55 * sigma)
-    #         )
-
-    #         min_sell_price = max(
-    #             round(picnic_basket1.max_volume_bid_price + 0.55 * sigma),
-    #             min_sell_price
-    #         )
-
-    #     Strategy.simple_market_making(
-    #         product=picnic_basket1,
-    #         max_buy_price=max_buy_price,
-    #         min_sell_price=min_sell_price,
-    #     )
-
-    # def trade_picnic_basket2(self) -> None:
-    #     picnic_basket2 = self.products["PICNIC_BASKET2"]
-
-    #     c = self.products["CROISSANTS"].mid_price
-    #     j = self.products["JAMS"].mid_price
-
-    #     fair_value = 4 * c + 2 * j
-
-    #     max_buy_price = round(fair_value - 25 - 25 * max(picnic_basket2.position_ratio, 0))
-    #     min_sell_price = round(fair_value + 25 + 25 * max(-picnic_basket2.position_ratio, 0))
-
-    #     Strategy.simple_market_making(
-    #         product=picnic_basket2,
-    #         max_buy_price=max_buy_price,
-    #         min_sell_price=min_sell_price,
-    #     )
     def trade_picnic_basket1(self) -> None:
-        basket = self.products["PICNIC_BASKET1"]
+        picnic_basket1 = self.products["PICNIC_BASKET1"]
         croissants = self.products["CROISSANTS"]
         jams = self.products["JAMS"]
         djembes = self.products["DJEMBES"]
 
-        # Use latest mid-prices
-        c = croissants.mid_price
-        j = jams.mid_price
-        d = djembes.mid_price
-        theoretical = 6 * c + 3 * j + 1 * d
+        f = lambda c, j, d: 6 * c + 3 * j + 1 * d
 
-        basket_mid = basket.mid_price
-        premium = basket_mid - theoretical
+        sum_of_parts = f(croissants.mid_price, jams.mid_price, djembes.mid_price)
+        fair_value = 0.55 * sum_of_parts + 0.45 * picnic_basket1.mid_price
 
-        # Store 50 past premiums
-        if not hasattr(self, "pb1_premiums"):
-            self.pb1_premiums = []
-        self.pb1_premiums.append(premium)
-        if len(self.pb1_premiums) > 50:
-            self.pb1_premiums.pop(0)
+        max_buy_price = round(fair_value - 6)
+        min_sell_price = round(fair_value + 6)
 
-        if len(self.pb1_premiums) < 10:
-            return  # Not enough history
+        cp = croissants.mid_price_history[-100:]
+        jp = jams.mid_price_history[-100:]
+        dp = djembes.mid_price_history[-100:]
+        pp = picnic_basket1.mid_price_history[-100:]
 
-        mu = mean(self.pb1_premiums)
-        sigma = stdev(self.pb1_premiums)
-        z = (premium - mu) / (sigma + 1e-6)
+        premiums = [pp[i] - f(cp[i], jp[i], dp[i]) for i in range(len(pp))]
 
-        # Fair value adjustment based on Z
-        if z < -1.0 and basket.position < basket.limit:
-            # Basket undervalued → BUY
-            buy_price = min(basket.max_volume_ask_price, round(theoretical + mu - 0.5 * sigma))
-            basket.buy(buy_price, 1)
+        if len(premiums) >= 2:
+            mu, sigma = mean(premiums), stdev(premiums)
 
-        elif z > 1.0 and basket.position > -basket.limit:
-            # Basket overvalued → SELL
-            sell_price = max(basket.max_volume_bid_price, round(theoretical + mu + 0.5 * sigma))
-            basket.sell(sell_price, 1)
+            max_buy_price = min(
+                max_buy_price,
+                round(picnic_basket1.max_volume_ask_price - 0.55 * sigma)
+            )
+
+            min_sell_price = max(
+                min_sell_price,
+                round(picnic_basket1.max_volume_bid_price + 0.55 * sigma),
+            )
+
+        Strategy.simple_market_making(
+            product=picnic_basket1,
+            max_buy_price=max_buy_price,
+            min_sell_price=min_sell_price,
+        )
 
     def trade_picnic_basket2(self) -> None:
-        basket = self.products["PICNIC_BASKET2"]
+        picnic_basket2 = self.products["PICNIC_BASKET2"]
+
         c = self.products["CROISSANTS"].mid_price
         j = self.products["JAMS"].mid_price
-        theoretical = 4 * c + 2 * j
 
-        basket_mid = basket.mid_price
-        premium = basket_mid - theoretical
+        fair_value = 4 * c + 2 * j
 
-        if not hasattr(self, "pb2_premiums"):
-            self.pb2_premiums = []
-        self.pb2_premiums.append(premium)
-        if len(self.pb2_premiums) > 50:
-            self.pb2_premiums.pop(0)
+        max_buy_price = round(fair_value - 25)
+        min_sell_price = round(fair_value + 25)
 
-        if len(self.pb2_premiums) < 10:
-            return
-
-        mu = mean(self.pb2_premiums)
-        sigma = stdev(self.pb2_premiums)
-        z = (premium - mu) / (sigma + 1e-6)
-
-        if z < -1.0 and basket.position < basket.limit:
-            buy_price = min(basket.max_volume_ask_price, round(theoretical + mu - 0.5 * sigma))
-            basket.buy(buy_price, 1)
-
-        elif z > 1.0 and basket.position > -basket.limit:
-            sell_price = max(basket.max_volume_bid_price, round(theoretical + mu + 0.5 * sigma))
-            basket.sell(sell_price, 1)
-
-    # def trade_picnic_basket1(self) -> None:
-    #     basket = self.products["PICNIC_BASKET1"]
-    #     croissants = self.products["CROISSANTS"]
-    #     jams = self.products["JAMS"]
-    #     djembes = self.products["DJEMBES"]
-
-    #     # Use last 5 prices for regression
-    #     c_recent = croissants.mid_price_history[-5:]
-    #     j_recent = jams.mid_price_history[-5:]
-    #     d_recent = djembes.mid_price_history[-5:]
-
-    #     c_pred = linear_regression_predict(c_recent)
-    #     j_pred = linear_regression_predict(j_recent)
-    #     d_pred = linear_regression_predict(d_recent)
-
-    #     high_c = max(croissants.mid_price_history)
-    #     low_c = min(croissants.mid_price_history)
-    #     high_j = max(jams.mid_price_history)
-    #     low_j = min(jams.mid_price_history)
-    #     high_d = max(djembes.mid_price_history)
-    #     low_d = min(djembes.mid_price_history)
-
-    #     # Simple weighting to incorporate high/low info (can be refined)
-    #     c_adj = 0.5 * c_pred + 0.25 * high_c + 0.25 * low_c
-    #     j_adj = 0.5 * j_pred + 0.25 * high_j + 0.25 * low_j
-    #     d_adj = 0.5 * d_pred + 0.25 * high_d + 0.25 * low_d
-
-    #     fair_value = 6 * c_adj + 3 * j_adj + 1 * d_adj
-
-    #     max_buy_price = round(fair_value - 8)
-    #     min_sell_price = round(fair_value + 8)
-
-    #     Strategy.simple_market_making(
-    #         product=basket,
-    #         max_buy_price=max_buy_price,
-    #         min_sell_price=min_sell_price,
-    #     )
-
-    # def trade_picnic_basket2(self) -> None:
-    #     basket = self.products["PICNIC_BASKET2"]
-    #     croissants = self.products["CROISSANTS"]
-    #     jams = self.products["JAMS"]
-
-    #     c_recent = croissants.mid_price_history[-5:]
-    #     j_recent = jams.mid_price_history[-5:]
-
-    #     c_pred = linear_regression_predict(c_recent)
-    #     j_pred = linear_regression_predict(j_recent)
-
-    #     high_c = max(croissants.mid_price_history)
-    #     low_c = min(croissants.mid_price_history)
-    #     high_j = max(jams.mid_price_history)
-    #     low_j = min(jams.mid_price_history)
-
-    #     c_adj = 0.5 * c_pred + 0.25 * high_c + 0.25 * low_c
-    #     j_adj = 0.5 * j_pred + 0.25 * high_j + 0.25 * low_j
-
-    #     fair_value = 4 * c_adj + 2 * j_adj
-
-    #     # Risk-aware buffer based on current position
-    #     max_buy_price = round(fair_value - 10 - 10 * max(basket.position_ratio, 0))
-    #     min_sell_price = round(fair_value + 10 + 10 * max(-basket.position_ratio, 0))
-
-    #     Strategy.simple_market_making(
-    #         product=basket,
-    #         max_buy_price=max_buy_price,
-    #         min_sell_price=min_sell_price,
-    #     )
+        Strategy.simple_market_making(
+            product=picnic_basket2,
+            max_buy_price=max_buy_price,
+            min_sell_price=min_sell_price,
+        )
