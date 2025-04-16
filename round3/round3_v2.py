@@ -376,14 +376,14 @@ class Trader:
             # new_trader_data[symbol] = product.save()
             pass
 
-        # self.trade_rainforest_resin()
-        # self.trade_kelp()
-        # self.trade_squid_ink()
-        #
-        # self.trade_croissants()
-        # self.trade_jams()
+        self.trade_rainforest_resin()
+        self.trade_kelp()
+        self.trade_squid_ink()
+
+        self.trade_croissants()
+        self.trade_jams()
         self.trade_djembes() # TO-DO
-        # self.trade_picnic_basket1()
+        self.trade_picnic_basket1()
         self.trade_picnic_basket2()
 
         result = {
@@ -569,8 +569,8 @@ class Trader:
 
         fair_value = 4 * c + 2 * j
 
-        max_buy_price = round(fair_value - 25)
-        min_sell_price = round(fair_value + 25)
+        max_buy_price = round(fair_value - 60)
+        min_sell_price = round(fair_value - 20)
 
         Strategy.simple_market_making(
             product=picnic_basket2,
