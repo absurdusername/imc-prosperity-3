@@ -166,7 +166,7 @@ class Product:
         self.planned_buy_volume: int = 0
         self.planned_sell_volume: int = 0
 
-    def load(self, state: TradingState, old_data: JSON=None) -> None:
+    def load(self, state: TradingState, old_data: JSON = None) -> None:
         """
         Update everything using new data from `state`.
         Restore old data from `old_data` if it is provided.
@@ -187,14 +187,15 @@ class Product:
         self.asks = sorted(asks)
         self.bids = sorted(bids, reverse=True)
 
-        # Restore self.mid_price_history, append new mid-price, maintain length
+        # Restore self.mid_price_history, append new mid-price
         if old_data:
             self.mid_price_history = old_data
 
         mid_price = (max(asks, key=lambda t: t[1])[0] + max(bids, key=lambda t: t[1])[0]) / 2
         self.mid_price_history.append(mid_price)
 
-        if len(self.mid_price_history) > 2 * self.size_limit:
+        # Pruning at 1.1 * size_limit has good amortized cost
+        if len(self.mid_price_history) > 1.1 * self.size_limit:
             self.mid_price_history = self.mid_price_history[-self.size_limit:]
 
     def save(self) -> JSON:
@@ -273,6 +274,12 @@ class Product:
         m, b = np.polyfit(range(1, window_size + 1), mid_prices, 1)
         return m, b
 
+    def estimate_fair_value_LR(self) -> float:
+        m, b = self.linear_regression()
+        x = len(self.mid_price_history)
+
+        return m * x + b
+
 
 class Strategy:
     @staticmethod
@@ -323,18 +330,6 @@ class Strategy:
         price = max(min_sell_price, product.max_volume_ask_price - 1)
         product.sell(price, product.sell_capacity)
 
-    @staticmethod
-    def estimate_fair_value_LR(product: Product) -> float:
-        """
-        Fit a line to all available mid-prices.
-        Return estimate for what the current mid-price *should have been* according to the line.
-        """
-        m, b = product.linear_regression()
-        x = len(product.mid_price_history)  # iteration number
-
-        fair_value = m * x + b
-        return fair_value
-
 
 class BasketGoodsTrader:
     """Trade all the Round 2 products."""
@@ -365,7 +360,7 @@ class BasketGoodsTrader:
         self._trade_jams()
 
     def _trade_croissants(self) -> None:
-        fair_value = Strategy.estimate_fair_value_LR(self.croissants)
+        fair_value = self.croissants.estimate_fair_value_LR()
         self.cached_fair_values["CROISSANTS"] = fair_value
 
         max_buy_price = round(fair_value - 5)
@@ -568,7 +563,7 @@ class Trader:
         if len(squid_ink.mid_price_history) < 100:
             return
 
-        fair_value = Strategy.estimate_fair_value_LR(squid_ink)
+        fair_value = squid_ink.estimate_fair_value_LR()
 
         max_buy_price = round(fair_value - 7)
         min_sell_price = round(fair_value + 7)
