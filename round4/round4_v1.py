@@ -119,10 +119,25 @@ class Logger:
         return json.dumps(value, cls=ProsperityEncoder, separators=(",", ":"))
 
     def truncate(self, value: str, max_length: int) -> str:
-        if len(value) <= max_length:
-            return value
+        lo, hi = 0, min(len(value), max_length)
+        out = ""
 
-        return value[: max_length - 3] + "..."
+        while lo <= hi:
+            mid = (lo + hi) // 2
+
+            candidate = value[:mid]
+            if len(candidate) < len(value):
+                candidate += "..."
+
+            encoded_candidate = json.dumps(candidate)
+
+            if len(encoded_candidate) <= max_length:
+                out = candidate
+                lo = mid + 1
+            else:
+                hi = mid - 1
+
+        return out
 
 
 class Product:
@@ -283,7 +298,7 @@ class Product:
 
 class Strategy:
     @staticmethod
-    def simple_market_making(
+    def buy_and_sell(
             product: Product,
             max_buy_price: int,
             min_sell_price: int,
@@ -328,7 +343,7 @@ class Strategy:
                 to_sell -= quantity
 
         price = max(min_sell_price, product.max_volume_ask_price - 1)
-        product.sell(price, product.sell_capacity)
+        product.sell(price, to_sell)
 
 
 class BasketGoodsTrader:
@@ -366,7 +381,7 @@ class BasketGoodsTrader:
         max_buy_price = round(fair_value - 5)
         min_sell_price = round(fair_value + 5)
 
-        Strategy.simple_market_making(
+        Strategy.buy_and_sell(
             product=self.croissants,
             max_buy_price=max_buy_price,
             min_sell_price=min_sell_price,
@@ -402,7 +417,7 @@ class BasketGoodsTrader:
                 round(self.picnic_basket1.max_volume_bid_price + 0.55 * sigma),
             )
 
-        Strategy.simple_market_making(
+        Strategy.buy_and_sell(
             product=self.picnic_basket1,
             max_buy_price=max_buy_price,
             min_sell_price=min_sell_price,
@@ -416,7 +431,7 @@ class BasketGoodsTrader:
         max_buy_price = round(fair_value - 60)
         min_sell_price = round(fair_value - 20)
 
-        Strategy.simple_market_making(
+        Strategy.buy_and_sell(
             product=self.picnic_basket2,
             max_buy_price=max_buy_price,
             min_sell_price=min_sell_price,
@@ -432,7 +447,7 @@ class BasketGoodsTrader:
         max_buy_price = round(fair_value - 14)
         min_sell_price = round(fair_value + 14)
 
-        Strategy.simple_market_making(
+        Strategy.buy_and_sell(
             product=self.jams,
             max_buy_price=max_buy_price,
             min_sell_price=min_sell_price,
@@ -483,9 +498,10 @@ class Trader:
             "CROISSANTS": Product("CROISSANTS", 250, history_size=10_000),
             "JAMS": Product("JAMS", 350, history_size=100),
             "DJEMBES": Product("DJEMBES", 60, history_size=100),
-
             "PICNIC_BASKET1": Product("PICNIC_BASKET1", 60, history_size=100),
             "PICNIC_BASKET2": Product("PICNIC_BASKET2", 100),
+
+            "MAGNIFICENT_MACARONS": Product("MAGNIFICENT_MACARONS", 75, history_size=10_000),
         }
 
         self.basket_goods_trader = BasketGoodsTrader(
@@ -500,37 +516,41 @@ class Trader:
         # load old data from state.traderData + new data from state
         old_trader_data = json.loads(state.traderData) if state.traderData != "" else {}
         for symbol, product in self.products.items():
-            product.load(state, old_trader_data.get(symbol, {}))
-            # product.load(state, None)
+            # product.load(state, old_trader_data.get(symbol, {}))
+            product.load(state, None)
 
         # store all data in a dict for next iteration
         new_trader_data = dict()
         for symbol, product in self.products.items():
-            new_trader_data[symbol] = product.save()
+            # new_trader_data[symbol] = product.save()
+            pass
 
-        self.trade_rainforest_resin()
-        self.trade_kelp()
+        # self.trade_rainforest_resin()
+        # self.trade_kelp()
         self.trade_squid_ink()
 
-        self.basket_goods_trader.trade()
+        # self.basket_goods_trader.trade()
+
+        conversions = 0
+        # observations = state.observations.conversionObservations.get("MAGNIFICENT_MACARONS", None)
+        # conversions = self.trade_macarons(observations) if observations is not None else None
 
         result = {
             symbol: product.planned_orders
             for symbol, product in self.products.items()
         }
-        conversions = 0
 
         logger = Logger()
         logger.flush(state, result, conversions, state.traderData)
 
-        return result, 0, json.dumps(new_trader_data)
+        return result, conversions, json.dumps(new_trader_data)
 
     def trade_rainforest_resin(self) -> None:
         resin = self.products["RAINFOREST_RESIN"]
         max_buy_price = 9999 + (resin.position_ratio < -0.5)
         min_sell_price = 10_001 - (resin.position_ratio > 0.5)
 
-        Strategy.simple_market_making(
+        Strategy.buy_and_sell(
             product=resin,
             max_buy_price=max_buy_price,
             min_sell_price=min_sell_price,
@@ -551,7 +571,7 @@ class Trader:
         if kelp.position_ratio > 0.9:
             min_sell_price -= 1  # desperate, will SELL at bad price
 
-        Strategy.simple_market_making(
+        Strategy.buy_and_sell(
             product=kelp,
             max_buy_price=max_buy_price,
             min_sell_price=min_sell_price,
@@ -568,8 +588,30 @@ class Trader:
         max_buy_price = round(fair_value - 7)
         min_sell_price = round(fair_value + 7)
 
-        Strategy.simple_market_making(
+        Strategy.buy_and_sell(
             product=squid_ink,
             max_buy_price=max_buy_price,
             min_sell_price=min_sell_price,
+        )
+
+    def trade_macarons(self, obs: ConversionObservation) -> int:
+        macarons = self.products["MAGNIFICENT_MACARONS"]
+        # conversions = min(-macarons.position, 10)
+        conversions = 0
+
+        to_buy = macarons.buy_capacity - conversions
+        to_sell = macarons.sell_capacity 
+
+        fair_value = macarons.estimate_fair_value_LR()
+        fair_value = (0.5 * fair_value + 0.5 * macarons.mid_price)
+
+        max_buy_price = round(fair_value - 5)
+        min_sell_price = round(fair_value + 5)
+
+        Strategy.buy_and_sell(
+            macarons,
+            max_buy_price,
+            min_sell_price,
+            to_buy,
+            to_sell
         )
